@@ -8,6 +8,7 @@ var Engine = function(server, options) {
       db     = this._options.database || this.DEFAULT_DATABASE,
       auth   = this._options.password,
       gc     = this._options.gc       || this.DEFAULT_GC,
+      pl     = this._options.pl       || this.DEFAULT_PACKET_LIMIT,
       socket = this._options.socket;
 
   this._ns  = this._options.namespace || '';
@@ -51,6 +52,7 @@ Engine.prototype = {
   DEFAULT_DATABASE: 0,
   DEFAULT_GC:       60,
   LOCK_TIMEOUT:     120,
+  DEFAULT_PACKET_LIMIT: 2048,
 
   disconnect: function() {
     this._redis.end();
@@ -143,10 +145,18 @@ Engine.prototype = {
 
   publish: function(message, channels) {
     this._server.debug('Publishing message ?', message);
-
     var self        = this,
         jsonMessage = JSON.stringify(message),
         keys        = channels.map(function(c) { return self._ns + '/channels' + c });
+    var bytes = Buffer.byteLength(jsonMessage, 'utf8');
+
+
+    this._server.info('Size of packet too large clientID:' + message.clientId + ' data ----> ' + jsonMessage);
+    if (pl && bytes > pl) {
+      this._server.error('Size of packet too large clientID:' + message.clientId + ' data ----> ' + jsonMessage);
+      message.error = '413:Payload Too Large';
+      return;
+    }
 
     var notify = function(error, clients) {
       clients.forEach(function(clientId) {
