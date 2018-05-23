@@ -2,14 +2,14 @@ var Engine = function (server, options) {
   this._server = server;
   this._options = options || {};
 
-  var redis = require('redis'),
-    host = this._options.host || this.DEFAULT_HOST,
-    port = this._options.port || this.DEFAULT_PORT,
-    db = this._options.database || this.DEFAULT_DATABASE,
-    auth = this._options.password,
-    gc = this._options.gc || this.DEFAULT_GC,
-    pl = this._options.pl || this.DEFAULT_PACKET_LIMIT,
-    socket = this._options.socket;
+  var redis  = require('redis'),
+      host   = this._options.host     || this.DEFAULT_HOST,
+      port   = this._options.port     || this.DEFAULT_PORT,
+      db     = this._options.database || this.DEFAULT_DATABASE,
+      auth   = this._options.password,
+      pl     = 0,
+      gc     = this._options.gc       || this.DEFAULT_GC,
+      socket = this._options.socket;
 
   this._ns = this._options.namespace || '';
 
@@ -29,43 +29,40 @@ var Engine = function (server, options) {
   this._subscriber.select(db);
 
   this._messageChannel = this._ns + '/notifications/messages';
-  this._closeChannel = this._ns + '/notifications/close';
+  this._closeChannel   = this._ns + '/notifications/close';
 
   var self = this;
   this._subscriber.subscribe(this._messageChannel);
   this._subscriber.subscribe(this._closeChannel);
-  this._subscriber.on('message', function (topic, message) {
+  this._subscriber.on('message', function(topic, message) {
     if (topic === self._messageChannel) self.emptyQueue(message);
-    if (topic === self._closeChannel) self._server.trigger('close', message);
+    if (topic === self._closeChannel)   self._server.trigger('close', message);
   });
 
-  this._gc = setInterval(function () {
-    self.gc()
-  }, gc * 1000);
+  this._gc = setInterval(function() { self.gc() }, gc * 1000);
 };
 
-Engine.create = function (server, options) {
+Engine.create = function(server, options) {
   return new this(server, options);
 };
 
 Engine.prototype = {
-  DEFAULT_HOST: 'localhost',
-  DEFAULT_PORT: 6379,
+  DEFAULT_HOST:     'localhost',
+  DEFAULT_PORT:     6379,
   DEFAULT_DATABASE: 0,
-  DEFAULT_GC: 60,
-  LOCK_TIMEOUT: 120,
-  DEFAULT_PACKET_LIMIT: 2048,
+  DEFAULT_GC:       60,
+  LOCK_TIMEOUT:     120,
 
-  disconnect: function () {
+  disconnect: function() {
     this._redis.end();
     this._subscriber.unsubscribe();
     this._subscriber.end();
     clearInterval(this._gc);
   },
 
-  createClient: function (callback, context) {
+  createClient: function(callback, context) {
     var clientId = this._server.generateId(), self = this;
-    this._redis.zadd(this._ns + '/clients', 0, clientId, function (error, added) {
+    this._redis.zadd(this._ns + '/clients', 0, clientId, function(error, added) {
       if (added === 0) return self.createClient(callback, context);
       self._server.debug('Created new client ?', clientId);
       self.ping(clientId);
@@ -74,23 +71,23 @@ Engine.prototype = {
     });
   },
 
-  clientExists: function (clientId, callback, context) {
+  clientExists: function(clientId, callback, context) {
     var cutoff = new Date().getTime() - (1000 * 1.6 * this._server.timeout);
 
-    this._redis.zscore(this._ns + '/clients', clientId, function (error, score) {
+    this._redis.zscore(this._ns + '/clients', clientId, function(error, score) {
       callback.call(context, parseInt(score, 10) > cutoff);
     });
   },
 
-  destroyClient: function (clientId, callback, context) {
+  destroyClient: function(clientId, callback, context) {
     var self = this;
 
-    this._redis.smembers(this._ns + '/clients/' + clientId + '/channels', function (error, channels) {
+    this._redis.smembers(this._ns + '/clients/' + clientId + '/channels', function(error, channels) {
       var multi = self._redis.multi();
 
       multi.zadd(self._ns + '/clients', 0, clientId);
 
-      channels.forEach(function (channel) {
+      channels.forEach(function(channel) {
         multi.srem(self._ns + '/clients/' + clientId + '/channels', channel);
         multi.srem(self._ns + '/channels' + channel, clientId);
       });
@@ -98,8 +95,8 @@ Engine.prototype = {
       multi.zrem(self._ns + '/clients', clientId);
       multi.publish(self._closeChannel, clientId);
 
-      multi.exec(function (error, results) {
-        channels.forEach(function (channel, i) {
+      multi.exec(function(error, results) {
+        channels.forEach(function(channel, i) {
           if (results[2 * i + 1] !== 1) return;
           self._server.trigger('unsubscribe', clientId, channel);
           self._server.debug('Unsubscribed client ? from channel ?', clientId, channel);
@@ -113,7 +110,7 @@ Engine.prototype = {
     });
   },
 
-  ping: function (clientId) {
+  ping: function(clientId) {
     var timeout = this._server.timeout;
     if (typeof timeout !== 'number') return;
 
@@ -123,10 +120,10 @@ Engine.prototype = {
     this._redis.zadd(this._ns + '/clients', time, clientId);
   },
 
-  subscribe: function (clientId, channel, callback, context) {
+  subscribe: function(clientId, channel, callback, context) {
     var self = this;
-    this._redis.sadd(this._ns + '/clients/' + clientId + '/channels', channel, function (error, added) {
-      self._redis.sadd(self._ns + '/channels' + channel, clientId, function () {
+    this._redis.sadd(this._ns + '/clients/' + clientId + '/channels', channel, function(error, added) {
+      self._redis.sadd(self._ns + '/channels' + channel, clientId, function() {
         self._server.debug('Subscribed client ? to channel ?', clientId, channel);
         if (added === 1) self._server.trigger('subscribe', clientId, channel);
         if (callback) callback.call(context);
@@ -134,10 +131,10 @@ Engine.prototype = {
     });
   },
 
-  unsubscribe: function (clientId, channel, callback, context) {
+  unsubscribe: function(clientId, channel, callback, context) {
     var self = this;
-    this._redis.srem(this._ns + '/clients/' + clientId + '/channels', channel, function (error, removed) {
-      self._redis.srem(self._ns + '/channels' + channel, clientId, function () {
+    this._redis.srem(this._ns + '/clients/' + clientId + '/channels', channel, function(error, removed) {
+      self._redis.srem(self._ns + '/channels' + channel, clientId, function() {
         self._server.debug('Unsubscribed client ? from channel ?', clientId, channel);
         if (removed === 1) self._server.trigger('unsubscribe', clientId, channel);
         if (callback) callback.call(context);
@@ -145,31 +142,30 @@ Engine.prototype = {
     });
   },
 
-  publish: function (message, channels) {
+  publish: function(message, channels) {
     this._server.debug('Publishing message ?', message);
-    var self = this,
-      jsonMessage = JSON.stringify(message),
-      keys = channels.map(function (c) {
-        return self._ns + '/channels' + c
-      });
-    var bytes = Buffer.byteLength(jsonMessage, 'utf8');
 
-    this._server.info('Size of packet: ' + bytes + ' clientID:' + message.clientId + ' data ----> ' + jsonMessage);
-    if (pl && bytes > pl) {
-      this._server.error('Size of packet too large clientID:' + message.clientId + ' data ----> ' + jsonMessage);
-      message.error = '413:Payload Too Large';
-      return;
-    }
+    var self        = this,
+        jsonMessage = JSON.stringify(message),
+        keys        = channels.map(function(c) { return self._ns + '/channels' + c });
 
-    var notify = function (error, clients) {
-      clients.forEach(function (clientId) {
+    // var bytes = Buffer.byteLength(jsonMessage, 'utf8');
+    // this._server.info('Size of packet: ' + bytes + ' clientID:' + message.clientId + ' data ----> ' + jsonMessage);
+    // if (pl && bytes > pl) {
+    //   this._server.error('Size of packet too large clientID:' + message.clientId + ' data ----> ' + jsonMessage);
+    //   message.error = '413:Payload Too Large';
+    //   return;
+    // }
+
+    var notify = function(error, clients) {
+      clients.forEach(function(clientId) {
         var queue = self._ns + '/clients/' + clientId + '/messages';
 
         self._server.debug('Queueing for client ?: ?', clientId, message);
         self._redis.rpush(queue, jsonMessage);
         self._redis.publish(self._messageChannel, clientId);
 
-        self.clientExists(clientId, function (exists) {
+        self.clientExists(clientId, function(exists) {
           if (!exists) self._redis.del(queue);
         });
       });
@@ -180,38 +176,36 @@ Engine.prototype = {
     this._server.trigger('publish', message.clientId, message.channel, message.data);
   },
 
-  emptyQueue: function (clientId) {
+  emptyQueue: function(clientId) {
     if (!this._server.hasConnection(clientId)) return;
 
-    var key = this._ns + '/clients/' + clientId + '/messages',
-      multi = this._redis.multi(),
-      self = this;
+    var key   = this._ns + '/clients/' + clientId + '/messages',
+        multi = this._redis.multi(),
+        self  = this;
 
-    multi.lrange(key, 0, -1, function (error, jsonMessages) {
+    multi.lrange(key, 0, -1, function(error, jsonMessages) {
       if (!jsonMessages) return;
-      var messages = jsonMessages.map(function (json) {
-        return JSON.parse(json)
-      });
+      var messages = jsonMessages.map(function(json) { return JSON.parse(json) });
       self._server.deliver(clientId, messages);
     });
     multi.del(key);
     multi.exec();
   },
 
-  gc: function () {
+  gc: function() {
     var timeout = this._server.timeout;
     if (typeof timeout !== 'number') return;
 
-    this._withLock('gc', function (releaseLock) {
+    this._withLock('gc', function(releaseLock) {
       var cutoff = new Date().getTime() - 1000 * 2 * timeout,
-        self = this;
+          self   = this;
 
-      this._redis.zrangebyscore(this._ns + '/clients', 0, cutoff, function (error, clients) {
+      this._redis.zrangebyscore(this._ns + '/clients', 0, cutoff, function(error, clients) {
         var i = 0, n = clients.length;
         if (i === n) return releaseLock();
 
-        clients.forEach(function (clientId) {
-          this.destroyClient(clientId, function () {
+        clients.forEach(function(clientId) {
+          this.destroyClient(clientId, function() {
             i += 1;
             if (i === n) releaseLock();
           }, this);
@@ -220,26 +214,26 @@ Engine.prototype = {
     }, this);
   },
 
-  _withLock: function (lockName, callback, context) {
-    var lockKey = this._ns + '/locks/' + lockName,
-      currentTime = new Date().getTime(),
-      expiry = currentTime + this.LOCK_TIMEOUT * 1000 + 1,
-      self = this;
+  _withLock: function(lockName, callback, context) {
+    var lockKey     = this._ns + '/locks/' + lockName,
+        currentTime = new Date().getTime(),
+        expiry      = currentTime + this.LOCK_TIMEOUT * 1000 + 1,
+        self        = this;
 
-    var releaseLock = function () {
+    var releaseLock = function() {
       if (new Date().getTime() < expiry) self._redis.del(lockKey);
     };
 
-    this._redis.setnx(lockKey, expiry, function (error, set) {
+    this._redis.setnx(lockKey, expiry, function(error, set) {
       if (set === 1) return callback.call(context, releaseLock);
 
-      self._redis.get(lockKey, function (error, timeout) {
+      self._redis.get(lockKey, function(error, timeout) {
         if (!timeout) return;
 
         var lockTimeout = parseInt(timeout, 10);
         if (currentTime < lockTimeout) return;
 
-        self._redis.getset(lockKey, expiry, function (error, oldValue) {
+        self._redis.getset(lockKey, expiry, function(error, oldValue) {
           if (oldValue !== timeout) return;
           callback.call(context, releaseLock);
         });
